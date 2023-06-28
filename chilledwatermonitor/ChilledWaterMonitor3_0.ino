@@ -17,35 +17,12 @@ Adafruit_ADS1115 ads1115;
 // ==== DHT =====
 #include <DHT.h>
 
-// ==== InfluxDB ====
-#if defined(ESP32)
-#include <WiFiMulti.h>
-WiFiMulti wifiMulti;
-#define DEVICE "ESP32"
-#elif defined(ESP8266)
-#include <ESP8266WiFiMulti.h>
-ESP8266WiFiMulti wifiMulti;
-#define DEVICE "ESP8266"
-#define WIFI_AUTH_OPEN ENC_TYPE_NONE
-#endif
 
-#include <InfluxDbClient.h>
-#include <InfluxDbCloud.h>
 
 // WiFi AP SSID
 #define WIFI_SSID "MaLab"
 // WiFi password
 #define WIFI_PASSWORD "MaLabG41"
-
-// InfluxDB v2 server url, e.g. https://eu-central-1-1.aws.cloud2.influxdata.com (Use: InfluxDB UI -> Load Data -> Client Libraries)
-#define INFLUXDB_URL "https://us-central1-1.gcp.cloud2.influxdata.com"
-// InfluxDB v2 server or cloud API token (Use: InfluxDB UI -> Data -> API Tokens -> Generate API Token)
-#define INFLUXDB_TOKEN "Gnpd4NJVTlLCHhTo80ZjX6gMHhGn4-BlzifQbwfgah-ZB35AaTriLezTmvHP1D2FU8_POUx9-knpwwHEY-Xc0Q=="
-// InfluxDB v2 organization id (Use: InfluxDB UI -> User -> About -> Common Ids )
-#define INFLUXDB_ORG "ma.quantumlab@gmail.com"
-//#define INFLUXDB_ORG "1d17bc6926f18098"
-// InfluxDB v2 bucket name (Use: InfluxDB UI ->  Data -> Buckets)
-#define INFLUXDB_BUCKET "ChillerMonitorBucket"
 
 
 #define TZ_INFO "EST5EDT"
@@ -55,11 +32,17 @@ ESP8266WiFiMulti wifiMulti;
 #define MAX_BATCH_SIZE 10
 #define WRITE_BUFFER_SIZE 30
 
-// InfluxDB client instance with preconfigured InfluxCloud certificate
-InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert);
-// InfluxDB client instance without preconfigured InfluxCloud certificate for insecure connection 
-//InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN);
-
+/*
+WIFI Post Req 
+Data writing
+*/
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+WifiClient client;
+HTTPClient httpClient;
+const char *URL = "http://128.210.107.25:8080/chilledwatermonitor/post";
 //// Data point
 Point chillerStatus("chiller_status");
 
@@ -138,14 +121,12 @@ void setup() {
   Serial.println(" - ADC Range: 0 to +4.096V, GAIN_ONE (1 bit = 0.125 mV)");
 
   // Setup wifi
-  WiFi.mode(WIFI_STA);
-  wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
-
-  Serial.print("Connecting to wifi");
-  while (wifiMulti.run() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(500);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
   }
+  
   isWifiConnected = true;
   Serial.println();
   Serial.print(" - wifi_SSID: ");
@@ -154,18 +135,6 @@ void setup() {
   // Add tags
   chillerStatus.addTag("device", DEVICE);
   chillerStatus.addTag("wifi_SSID", WiFi.SSID());
-
-  // Check server connection
-  if (client.validateConnection()) {
-    Serial.print("Connected to InfluxDB: ");
-    Serial.println(client.getServerUrl());
-  } else {
-    Serial.print("InfluxDB connection failed: ");
-    Serial.println(client.getLastErrorMessage());
-  }
-
-  // Enable messages batching and retry buffer
-  client.setWriteOptions(WriteOptions().writePrecision(WRITE_PRECISION).batchSize(MAX_BATCH_SIZE).bufferSize(WRITE_BUFFER_SIZE));
 }
 
 
@@ -269,37 +238,46 @@ void reportSensorValues(){
 
   chillerStatus.addField("wifi_rssi", WiFi.RSSI()); //wifi signal strength
 
-  // Print what are we exactly writing
-  Serial.print("Writing: ");
-  Serial.println(client.pointToLineProtocol(chillerStatus));
+// Post to DB
+  DynamicJsonDocument jsonDoc(256); //computed about 188 bytes but just to be safe..
+  jsonDoc["time"] = time(nullptr);
+  jsonDoc["temp_in"] = temp_in;
+  jsonDoc["pressure_in"] = pressure_in;
+  jsonDoc["pressure_out"] = pressure_out;
+  jsonDoc["pressure_diff"] = pressure_diff;
+  jsonDoc["room_temp"] = room_temp;
+  jsonDoc["room_hum"] = room_hum;
+  jsonDoc["lab_temp"] = lab_temp;
+  jsonDoc["lab_hum"] = lab_hum;
+  jsonDoc["wifi_rssi"] = WiFi.RSSI(); //wifi signal strength
 
-  // Write point into buffer - high priority measure
-  client.writePoint(chillerStatus);
+  String data;
+  serializeJson(jsonDoc, data);
+
+  httpClient.begin(client, URL);
+  //key value optional
+  // httpClient.addHeader("", "");
+  int httpResponseCode = httpClient.POST(data);
+  if (httpResponseCode == HTTP_CODE_OK) {
+    Serial.println("POST request successful");
+  } else {
+    Serial.print("POST request failed with error code: ");
+    Serial.println(httpResponseCode);
+  }
+  String content = httpClient.getString();
+  httpClient.end();
+
+  Serial.println(content);
 
   // Clear fields for next usage. Tags remain the same.
   chillerStatus.clearFields();
 }
 
-void writeToInfluxDB(){
-  
-  Serial.println("Flushing data into InfluxDB");
-  if (!client.flushBuffer()) {
-    Serial.print("InfluxDB flush failed: ");
-    Serial.println(client.getLastErrorMessage());
-    Serial.print("Full buffer: ");
-    Serial.println(client.isBufferFull() ? "Yes" : "No");
-    isDataSent = false; //fail
-  }
-  else{
-    Serial.println("InfluxDB flush succcessful.");
-    isDataSent = true; //successful
-  }
-}
 
 void reconnectWifi(){
 
   // If no Wifi signal, try to reconnect it
-  if (wifiMulti.run() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Wifi connection lost");
     isWifiConnected = false;
   }
@@ -348,7 +326,6 @@ void displayData(){
   
 }
 
-
 // ================== main loop ====================
 
 void loop() {
@@ -365,15 +342,12 @@ void loop() {
   // read DHT values
   readDHT();
 
-  // save into local InfluxDB Point
- reportSensorValues();
+  // write to DB through http REST API
+  reportSensorValues();
 
   // if no Wifi signal, try to reconnect it
   reconnectWifi();
   
-  // force write to InfluxDB as single transaction
-  writeToInfluxDB();
-
   // show on oled display
   displayData();
   
