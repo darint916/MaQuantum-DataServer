@@ -40,11 +40,13 @@ Data writing
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
-WifiClient client;
+WiFiClient client;
 HTTPClient httpClient;
-const char *URL = "http://128.210.107.25:8080/chilledwatermonitor/post";
+
+
+const char *URL = "http://192.168.1.74:7000/chilledwatermonitor/post";
 //// Data point
-Point chillerStatus("chiller_status");
+// Point chillerStatus("chiller_status");
 
 // Number for loops to sync time using NTP
 int iterations = 0;
@@ -100,7 +102,7 @@ void setup() {
 
   // Accurate time is necessary for certificate validation and writing in batches
   // Syncing progress and the time will be printed to Serial.
-  timeSync(TZ_INFO, NTP_SERVER1, NTP_SERVER2);
+  // timeSync(TZ_INFO, NTP_SERVER1, NTP_SERVER2);
   
   // open I2C connection
   Wire.begin();
@@ -133,8 +135,8 @@ void setup() {
   Serial.println(WiFi.SSID());
 
   // Add tags
-  chillerStatus.addTag("device", DEVICE);
-  chillerStatus.addTag("wifi_SSID", WiFi.SSID());
+  // chillerStatus.addTag("device", DEVICE);
+  // chillerStatus.addTag("wifi_SSID", WiFi.SSID());
 }
 
 
@@ -223,20 +225,6 @@ void readDHT(){
 }
 
 void reportSensorValues(){
-  
-  // Report values
-  chillerStatus.setTime(time(nullptr));
-  
-  chillerStatus.addField("temp_in", temp_in);
-  chillerStatus.addField("pressure_in", pressure_in);
-  chillerStatus.addField("pressure_out", pressure_out);
-  chillerStatus.addField("pressure_diff", pressure_diff);
-  chillerStatus.addField("room_temp", room_temp);
-  chillerStatus.addField("room_hum", room_hum);
-  chillerStatus.addField("lab_temp", lab_temp);
-  chillerStatus.addField("lab_hum", lab_hum);
-
-  chillerStatus.addField("wifi_rssi", WiFi.RSSI()); //wifi signal strength
 
 // Post to DB
   DynamicJsonDocument jsonDoc(256); //computed about 188 bytes but just to be safe..
@@ -268,9 +256,6 @@ void reportSensorValues(){
   httpClient.end();
 
   Serial.println(content);
-
-  // Clear fields for next usage. Tags remain the same.
-  chillerStatus.clearFields();
 }
 
 
@@ -331,10 +316,10 @@ void displayData(){
 void loop() {
   
   // Sync time for batching once per N iterations
-  if (iterations++ >= 3000) {
-    timeSync(TZ_INFO, NTP_SERVER1, NTP_SERVER2);
-    iterations = 0;
-  }
+  // if (iterations++ >= 3000) {
+  //   timeSync(TZ_INFO, NTP_SERVER1, NTP_SERVER2);
+  //   iterations = 0;
+  // }
 
   // read sensor values from ADC
   readSensorValues();
